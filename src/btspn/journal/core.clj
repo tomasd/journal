@@ -4,7 +4,9 @@
     [taoensso.timbre :refer [info trace debug]]
     [clojure.core.match :refer [match]])
   )
-§
+
+
+
 
 (defn journal-seq [entry]
   (get entry 0))
@@ -78,12 +80,14 @@
 (defn- retain-items [buffer buffer-size]
   (subvec buffer (max (- (count buffer) buffer-size) 0)))
 
+(defn- entries-bounds [entries]
+  [(if-let [entry (first entries)]
+     (journal-seq entry) 0)
+   (if-let [entry (last entries)]
+     (journal-seq entry)
+     0)])
 (defn- serve-request [from to buffer reader queued resp]
-  (let [f (if-let [entry (first buffer)]
-            (journal-seq entry) 0)
-        l (if-let [entry (last buffer)]
-            (journal-seq entry)
-            0)]
+  (let [[f l] (entries-bounds buffer)]
     (cond
       (< to f)
       (do (put! resp
@@ -96,13 +100,16 @@
           queued)
 
       (< l from)
-      (conj queued [resp from to]))))
+      (do
+        (debug (str "Queueing " [from to] " current " [f l]))
+        (conj queued [resp from to])))))
 
 (defn- deque-requests [entry queued buffer reader]
   (let [candidates (filter (fn [[_ from to]]
                              (<= from (journal-seq entry) to))
                            queued)]
     (reduce (fn [queued [resp from to]]
+              (debug (str "Releasing " [from to]))
               (serve-request from to buffer reader queued resp))
             (remove (set candidates) queued)
             candidates
@@ -138,11 +145,12 @@
       [last-seq start-seq]
       (let [resp (chan)
             from (inc last-seq)]
+        (debug (str "Polling sequence " [from (+ from page-size)]))
         (>! journal-listener [:find from (+ from page-size) resp])
         (let [entries  (<! resp)
-              last-seq (if-let [entry (last entries)]
-                         (journal-seq entry)
-                         last-seq)]
+              [f l] (entries-bounds entries)
+              last-seq (or l last-seq)]
+          (debug (str "Got entries " [f l]))
           (onto-chan response entries false)
           (recur last-seq))))
     response))
@@ -152,6 +160,7 @@
                     current 0)
         response  (chan)
         entries   (poll-journal journal-listener start-seq page-size)]
+    (debug "Listening " id " from seq " start-seq)
     (go-loop
       [count 0]
       (let [entry (<! entries)]
@@ -172,26 +181,27 @@
      (start-journal in reg writer)
      [in reg]))
   ([in reg writer]
-   (info "Starting journal")
-   (go-loop
-     [journal-seq (last-seq writer)
-      streams #{}]
-     (match
+   (let [last-seq (last-seq writer)]
+     (info (str "Starting journal from " last-seq))
+     (go-loop
+       [journal-seq last-seq
+        streams #{}]
+       (match
          (alts! [in reg])
-       [[out v] in] (let [journal-seq (inc journal-seq)
-                          entry       (apply commit journal-seq v)]
+         [[out v] in] (let [journal-seq (inc journal-seq)
+                            entry       (apply commit journal-seq v)]
 
-                      (trace (str "Write entry " v))
-                      (write-entry writer entry)
-                      (>! out journal-seq)
-                      (dorun (map (fn [stream]
-                                    (publish-entry-to-stream stream entry))
-                                  streams))
-                      (recur journal-seq streams))
-       [[:register v] reg] (do
-                             (debug (str "Registering " v))
-                             (recur journal-seq (conj streams v)))
-       [[:unregister v] reg] (do
-                               (debug (str "Unregistering " v))
-                               (recur journal-seq (remove #{v} streams)))))
+                        (trace (str "Write entry " v))
+                        (write-entry writer entry)
+                        (>! out journal-seq)
+                        (dorun (map (fn [stream]
+                                      (publish-entry-to-stream stream entry))
+                                    streams))
+                        (recur journal-seq streams))
+         [[:register v] reg] (do
+                               (debug (str "Registering " v))
+                               (recur journal-seq (conj streams v)))
+         [[:unregister v] reg] (do
+                                 (debug (str "Unregistering " v))
+                                 (recur journal-seq (remove #{v} streams))))))
     ))
