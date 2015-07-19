@@ -1,15 +1,10 @@
-(ns btspn.journal
+(ns btspn.journal.core
   (:require
-    [clojure.core.async :refer [go go-loop alts! chan put! >!! >! <! <!! pipe onto-chan close!]]
+    [clojure.core.async :refer [go go-loop alts! alt! chan put! >!! >! <! <!! onto-chan close!]]
     [taoensso.timbre :refer [info trace debug]]
     [clojure.core.match :refer [match]])
   )
-
-(defn foo
-  "I don't do a whole lot."
-  [x]
-  (println x "Hello, World!"))
-
+§
 
 (defn journal-seq [entry]
   (get entry 0))
@@ -182,7 +177,7 @@
      [journal-seq (last-seq writer)
       streams #{}]
      (match
-       (alts! [in reg])
+         (alts! [in reg])
        [[out v] in] (let [journal-seq (inc journal-seq)
                           entry       (apply commit journal-seq v)]
 

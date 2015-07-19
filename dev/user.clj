@@ -1,7 +1,7 @@
 (ns user
-  (:use [btspn.journal])
+  (:use [btspn.journal.core])
   (:require
-    [clojure.core.async :refer [go-loop <!]]
+    [clojure.core.async :refer [go-loop <! chan]]
     [taoensso.timbre :refer [debug]]
     ))
 
